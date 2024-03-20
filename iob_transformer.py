@@ -1,149 +1,69 @@
-import pandas as pd
-import re
-from nltk import word_tokenize, RegexpTokenizer
 
-class iob_transformer():
-    def __init__(self, coluna_id_ato: str, coluna_texto_entidade: str,
-                 coluna_tipo_entidade: str, keep_punctuation: bool = False,
-                 return_df: bool = False):
-        self.coluna_id_ato = coluna_id_ato
-        self.coluna_texto_entidade = coluna_texto_entidade
-        self.coluna_tipo_entidade = coluna_tipo_entidade
-        if not keep_punctuation:
-            self.tokenizer = RegexpTokenizer('\w+')
-        else:
-            self.tokenizer = False
+import pandas as pd
+from nltk import word_tokenize
+from nltk.tokenize import RegexpTokenizer
+
+class IOBTransformer:
+    def __init__(self, col_id_ato, col_texto_entidade, col_tipo_entidade, keep_punctuation=False, return_df=False):
+        self.col_id_ato = col_id_ato
+        self.col_texto_entidade = col_texto_entidade
+        self.col_tipo_entidade = col_tipo_entidade
+        self.keep_punctuation = keep_punctuation
         self.return_df = return_df
-    
+        self.tokenizer = RegexpTokenizer('\w+') if not keep_punctuation else None
+
     def fit(self, X, y=None, **fit_params):
         return self
-    
-    def gera_listas_atos_iobs(self, df):
-        
-        def _inclui_tags_vazias(texto_iob):
-            texto_ato_iob = texto_iob.copy()
-            for idx, token in enumerate(texto_ato_iob):
-                if token[0:2] == 'B-':# in token:
-                    pass
-                elif token[0:2] == 'I-':# in token:
-                    pass
-                else:
-                    texto_ato_iob[idx] = 'O'
-            
-            return texto_ato_iob
-        
-        def _constroi_iob(texto_ent, tipo_ent):
-            if self.tokenizer:
-                texto_ent_tok = self.tokenizer.tokenize(texto_ent)
-            else:
-                texto_ent_tok = word_tokenize(texto_ent)
-            iob_entidade = []
-            for index_token, token in enumerate(texto_ent_tok):
-                # primeiro token?
-                if index_token == 0:
-                    palavra = 'B-'+ tipo_ent
-                    iob_entidade.append(palavra)
-                # é o segundo token?
-                else:
-                    palavra = 'I-'+ tipo_ent
-                    iob_entidade.append(palavra)
-            # salva tupla contendo texto tokenizado e iob correspondente
-            if self.tokenizer:
-                tup_entidade = (self.tokenizer.tokenize(texto_ent), iob_entidade)
-            else:
-                tup_entidade = (word_tokenize(texto_ent), iob_entidade)
-            return tup_entidade
-        
-        def _match_iob_texto_ato(texto_entidade_tok, iob_ato):
-            texto_ato_iob = texto_entidade_tok.copy()
-            #print(iob_ato)
-            for tupla in iob_ato:
-                 # checa se o texto de referência existe
-                if tupla[0]:
-                    for i in range(len(texto_entidade_tok)):
-                        # checa se a tag existe
-                        if tupla[0][0]:
-                            # match primeiro token
-                            if texto_entidade_tok[i] == tupla[0][0]:
-                                # a sequência de tokens de texto_entidade_token na
-                                # posição encontrada é igual aos tokens da entidade?
-                                if texto_entidade_tok[i:i+len(tupla[0])] == tupla[0]:
-                                    texto_ato_iob[i:i+len(tupla[0])] = tupla[1]
-            
-            return texto_ato_iob
 
+    def _include_empty_tags(self, iob_tags):
+        return ['O' if not tag.startswith(('B-', 'I-')) else tag for tag in iob_tags]
+
+    def _build_iob_tags(self, entity_text, entity_type):
+        tokens = self.tokenizer.tokenize(entity_text) if self.tokenizer else word_tokenize(entity_text)
+        iob_tags = ['B-' + entity_type] + ['I-' + entity_type] * (len(tokens) - 1)
+        return tokens, iob_tags
+
+    def _match_iob_tags(self, entity_tokens, iob_acts):
+        iob_tags = ['O'] * len(entity_tokens)
+        for token_index, token in enumerate(entity_tokens):
+            for iob_act_tokens, iob_act_tags in iob_acts:
+                if token in iob_act_tokens:
+                    start_index = iob_act_tokens.index(token)
+                    if entity_tokens[token_index:token_index + len(iob_act_tokens[start_index:])] == iob_act_tokens[start_index:]:
+                        iob_tags[token_index:token_index + len(iob_act_tokens)] = iob_act_tags[start_index:]
+                        break
+        return iob_tags
+
+    def transform(self, df, **transform_params):
         atos = []
         lista_labels = []
         id_atos = set()
-        for row in df.iterrows():
-            id_ato = df.iloc[row[0]][self.coluna_id_ato]
-            texto_ato = []
-            texto_ato_iob = []
+        for _, row in df.iterrows():
+            id_ato = row[self.col_id_ato]
             if id_ato not in id_atos:
                 id_atos.add(id_ato)
-                lista_ids = list(df.query(f'{self.coluna_id_ato} == "{id_ato}"').index)
-                # print(lista_ids)
-                iob_ato = []
-                # todas as anotações que não são o ato inteiro
-                for index in lista_ids:
-                    texto_entidade = df.iloc[index][self.coluna_texto_entidade]
-                    tipo_entidade = df.iloc[index][self.coluna_tipo_entidade]
-                    if isinstance(self.tokenizer, RegexpTokenizer):
-                        texto_entidade_tok = self.tokenizer.tokenize(texto_entidade)
-                    else:
-                        texto_entidade_tok = word_tokenize(texto_entidade)
-                    if not tipo_entidade.isupper():
-                        tup_entidade = _constroi_iob(texto_entidade, tipo_entidade)
-                        iob_ato.append(tup_entidade)
-                # anotação do ato inteiro
-                for index in lista_ids:
-                    texto_entidade = df.iloc[index][self.coluna_texto_entidade]
-                    tipo_entidade = df.iloc[index][self.coluna_tipo_entidade]
-                    if self.tokenizer:
-                        texto_entidade_tok = self.tokenizer.tokenize(texto_entidade)
-                    else:
-                        texto_entidade_tok = word_tokenize(texto_entidade)
-                    if tipo_entidade.isupper():
-                        texto_ato = texto_entidade_tok
-                        texto_ato_iob = _match_iob_texto_ato(texto_entidade_tok, iob_ato)
-                texto_ato_iob = _inclui_tags_vazias(texto_ato_iob)
-                atos.append(texto_ato)
-                lista_labels.append(texto_ato_iob)
-        
-        return atos, lista_labels
+                ato_rows = df[df[self.col_id_ato] == id_ato]
+                entity_rows = ato_rows[ato_rows[self.col_tipo_entidade].str.islower()]
+                act_entities = [(row[self.col_texto_entidade], row[self.col_tipo_entidade]) for _, row in entity_rows.iterrows()]
+                entity_tokens, entity_iobs = zip(*[self._build_iob_tags(text, entity_type) for text, entity_type in act_entities])
+                iob_acts = [(tokens, tags) for tokens, tags in zip(entity_tokens, entity_iobs)]
+                act_text = ato_rows.iloc[0][self.col_texto_entidade]
+                act_tokens = self.tokenizer.tokenize(act_text) if self.tokenizer else word_tokenize(act_text)
+                iob_tags = self._match_iob_tags(act_tokens, iob_acts)
+                iob_tags = self._include_empty_tags(iob_tags)
+                atos.append(act_tokens)
+                lista_labels.append(iob_tags)
 
-    def create_iob_df(self, atos, lista_labels):
-        rows_list = []
-        dict1 = {
-                'Sentence_idx': -1,
-                'Word': 'UNK',
-                'Tag': 'O'
-            }
-        rows_list.append(dict1)
+        if self.return_df:
+            return self._create_iob_df(atos, lista_labels)
+        else:
+            return atos, lista_labels
+
+    def _create_iob_df(self, atos, lista_labels):
+        rows_list = [{'Sentence_idx': -1, 'Word': 'UNK', 'Tag': 'O'}]
         id_ato = 0
         for ato, labels in zip(atos, lista_labels):
             for word, label in zip(ato, labels):
-                dict1 = {
-                    'Sentence_idx': id_ato,
-                    'Word': word,
-                    'Tag': label
-                }
-                rows_list.append(dict1)
-                #print(word, label)
+                rows_list.append({'Sentence_idx': id_ato, 'Word': word, 'Tag': label})
             id_ato += 1
-        new_df = pd.DataFrame(rows_list)
-
-        return new_df    
-    
-    def transform(self, df, **transform_params):
-        dataframe = df.copy()
-        dataframe = dataframe.reset_index(drop=True)
-        atos, lista_labels = self.gera_listas_atos_iobs(dataframe)
-        if self.return_df:
-            iob_df = self.create_iob_df(atos, lista_labels)
-            return iob_df
-        else:
-            return atos, lista_labels
-        
-        
-
+        return pd.DataFrame(rows_list)
